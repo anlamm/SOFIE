@@ -51,6 +51,7 @@ public:
    fNB(UTILITY::Clean_name(nameB)), fNMean(UTILITY::Clean_name(nameMean)),
    fNVar(UTILITY::Clean_name(nameVar)), fNY(UTILITY::Clean_name(nameY)), fActivation(activation)
    {
+      fKind = OperatorKind::BATCHNORM;
       fInputTensorNames = { fNX };
       fOutputTensorNames = { fNY };
 
@@ -228,6 +229,71 @@ public:
    }
 
    std::vector<std::string> GetBlasRoutines() override { return { std::string("Copy"), std::string("Axpy") }; }
+
+   std::string Generate_GPU_Kernel_ALPAKA(std::string /*opName*/) override {
+      std::string op;
+      op  = "\n//------ BATCHNORM_KERNEL_ALPAKA\n";
+      op += "struct BatchNormKernel {\n";
+      op += SP + "template<typename TAcc, typename T>\n";
+      op += SP + "ALPAKA_FN_ACC void operator()(TAcc const& acc,\n";
+      op += SP + SP + "T const* __restrict__ X,\n";
+      op += SP + SP + "T const* __restrict__ scale,\n";
+      op += SP + SP + "T const* __restrict__ mean,\n";
+      op += SP + SP + "T const* __restrict__ bias,\n";
+      op += SP + SP + "T* __restrict__ Y,\n";
+      op += SP + SP + "std::size_t numElements,\n";
+      op += SP + SP + "bool applyRelu) const {\n";
+      op += SP + SP + "auto idx = alpaka::getIdx<alpaka::Grid, alpaka::Threads>(acc)[0];\n";
+      op += SP + SP + "if (idx < numElements) {\n";
+      op += SP + SP + SP + "T val = (X[idx] - mean[idx]) * scale[idx] + bias[idx];\n";
+      op += SP + SP + SP + "Y[idx] = (applyRelu && val < T(0)) ? T(0) : val;\n";
+      op += SP + SP + "}\n";
+      op += SP + "}\n";
+      op += "};\n";
+      return op;
+   }
+
+   std::string Generate_GPU_Kernel_Definitions_ALPAKA(std::string /*opName*/) override {
+      return SP + "BatchNormKernel batchNormKernel;\n";
+   }
+
+   std::string Generate_GPU_ALPAKA(std::string OpName) override {
+      OpName = "op_" + OpName;
+      if (fShapeX.empty()) {
+         throw std::runtime_error("TMVA SOFIE BatchNormalization called to Generate without being initialized first");
+      }
+
+      size_t length = ConvertShapeToLength(fShapeX);
+      bool hasRelu = (fActivation == EActivationType::RELU);
+
+      std::stringstream out;
+      out << "\n//------ BATCHNORM_GPU_ALPAKA\n";
+      out << SP << "auto const elementsPerThread_" << fNX << " = Vec::all(static_cast<Idx>(1));\n";
+      out << SP << "auto const elementsPerGrid_" << fNX << " = Vec::all(Idx{" << length << "});\n";
+      out << SP << "alpaka::KernelCfg<Acc> const kernelCfg_" << fNX
+          << " = {elementsPerGrid_" << fNX << ", elementsPerThread_" << fNX << "};\n";
+      out << SP << "auto const workDiv_" << fNX << " = alpaka::getValidWorkDiv(kernelCfg_" << fNX
+          << ", devAcc, batchNormKernel"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNX << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNScale << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNMean << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNB << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNY << ")"
+          << ", static_cast<Idx>(" << length << ")"
+          << ", " << (hasRelu ? "true" : "false") << ");\n";
+      out << SP << "alpaka::exec<Acc>(queue, workDiv_" << fNX
+          << ", batchNormKernel"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNX << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNScale << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNMean << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNB << ")"
+          << ", alpaka::getPtrNative(deviceBuf_" << fNY << ")"
+          << ", static_cast<Idx>(" << length << ")"
+          << ", " << (hasRelu ? "true" : "false") << ");\n";
+      return out.str();
+   }
+
+   std::vector<std::string> GetStdLibs() override { return { std::string("cmath") }; }
 };
 
 }//SOFIE

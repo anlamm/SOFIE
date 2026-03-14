@@ -230,6 +230,7 @@ void RModel::GenerateSessionCode_GPU_ALPAKA() {
       SOFIE::OperatorKind::EINSUM,
       SOFIE::OperatorKind::COMPARISON,
       SOFIE::OperatorKind::ELU,
+      SOFIE::OperatorKind::BATCHNORM,
    };
    bool OpNeedsBlas = false;
 
